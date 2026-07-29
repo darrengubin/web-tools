@@ -1,6 +1,0 @@
-mcp
-requests
-beautifulsoup4
-lxml
-trafilatura
-playwright
