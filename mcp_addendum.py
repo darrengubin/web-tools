@@ -349,65 +349,36 @@ def collect_all_sources(
     include_sina: bool = True,
     include_autohome: bool = True,
 ) -> dict:
-    """
-    6大信源统一采集 + 链接补充 + 自动时间窗口 + 去重
+    """6大信源统一采集——按信源顺序逐一执行
 
-    每个信源使用其专属采集方法：
-    - 中国汽车工业信息网 → collect_autoinfo_policy_by_api
-    - 财联社汽车早报    → collect_cls_auto_morning
-    - 界面新闻汽车早报  → collect_jiemian_auto_morning
-    - 新浪汽车7x24快讯  → collect_sina_auto_7x24
-    - 汽车之家上市新车  → collect_autohome_newbrand
-    - 易车新车新闻      → Playwright 无头浏览器
-
-    链接优先级：公众号 > 官方微博 > 垂媒官网 > 百度搜索 > 新浪财经
-    自动排除：拼盘/聚合类（MSN、百家号、今日头条）和搜索页链接
-
-    时间窗口规则（mode="auto" 时）：
+    自动计算时间窗口（mode=auto）：
     - 平时：前一天12:00 → 今天12:00
     - 周一：上周五12:00 → 周一12:00
 
-    Args:
-        date: 手动模式指定日期 "2026-07-29"。mode="auto"时可不传。
-        end_date: 手动模式结束日期。
-        mode: "auto"(自动时间窗口) 或 "manual"(指定日期)
-        resolve_links: 是否补充链接
-        include_yiche: 是否采易车（需 Playwright）
-        include_autoinfo: 是否采中国汽车工业信息网
-        include_cls: 是否采财联社
-        include_jiemian: 是否采界面新闻
-        include_sina: 是否采新浪汽车
-        include_autohome: 是否采汽车之家
-
-    Returns:
-        包含 items(新闻列表)、sources(各信源状态)、count(总数) 的 dict
+    每个信源是独立的MCP工具，也可单独调用。
     """
     # ---- 时间窗口计算 ----
     now = datetime.datetime.now()
     today = now.date()
-
     if mode == "auto":
         if now.hour < 12:
-            # 中午前：采集窗口为 昨天12:00 → 今天12:00
             start_date = today - datetime.timedelta(days=1)
             end_date_calc = today
-            if today.weekday() == 0:  # 周一：延伸到上周五
+            if today.weekday() == 0:
                 start_date = today - datetime.timedelta(days=3)
         else:
-            # 中午后：采集窗口为 今天12:00 → 明天12:00
             start_date = today
             end_date_calc = today + datetime.timedelta(days=1)
-
         start_str = start_date.isoformat()
         end_str = end_date_calc.isoformat()
     else:
         start_str = date
         end_str = end_date or date
 
-    date = start_str
-    end = end_str
+    date_param = start_str
+    end_param = end_str
 
-    # ---- 读取历史去重 ----
+    # ---- 历史去重 ----
     dedup_file = "/tmp/.collected_urls.json"
     seen_urls = set()
     if os.path.exists(dedup_file):
@@ -417,137 +388,56 @@ def collect_all_sources(
         except Exception:
             seen_urls = set()
 
-    items = []
-    sources = []
+    all_items = []
+    source_results = []
 
-    # [1] 中国汽车工业信息网 — 内联 API 采集（替代复杂的 collect_autoinfo_policy_by_api）
+    # [1] 中国汽车工业信息网
     if include_autoinfo:
-        try:
-            auto_items = _collect_autoinfo_api(date, end)
-            if auto_items:
-                items.extend(auto_items)
-            sources.append({
-                "name": "中国汽车工业信息网",
-                "ok": True,
-                "count": len(auto_items),
-                "url": "https://www.autoinfo.org.cn/",
-            })
-        except Exception as e:
-            sources.append({"name": "中国汽车工业信息网", "ok": False, "error": str(e)[:80]})
+        r = collect_autoinfo(date=date_param, end_date=end_param, resolve_links=resolve_links)
+        if r.get("items"):
+            all_items.extend(r["items"])
+        source_results.append(r)
 
-    # [2] 财联社汽车早报 — 专用采集
+    # [2] 财联社
     if include_cls:
-        try:
-            r = collect_cls_auto_morning(date, end, timeout=20)
-            if r.get("items"):
-                items.extend(r["items"])
-            sources.append({
-                "name": "财联社汽车早报",
-                "ok": r.get("ok", False),
-                "count": len(r.get("items", [])),
-                "url": "https://www.cls.cn/subject/7527",
-            })
-        except Exception as e:
-            sources.append({"name": "财联社汽车早报", "ok": False, "error": str(e)[:80]})
+        r = collect_cls(date=date_param, end_date=end_param, resolve_links=resolve_links)
+        if r.get("items"):
+            all_items.extend(r["items"])
+        source_results.append(r)
 
-    # [3] 界面新闻汽车早报 — 内联采集（修复日期匹配问题）
+    # [3] 界面新闻
     if include_jiemian:
-        try:
-            jiemian_items = _collect_jiemian_inline(date, end)
-            if jiemian_items:
-                items.extend(jiemian_items)
-            sources.append({
-                "name": "界面新闻汽车早报",
-                "ok": True,
-                "count": len(jiemian_items),
-                "url": "https://m.jiemian.com/lists/51_1.html",
-            })
-        except Exception as e:
-            sources.append({"name": "界面新闻汽车早报", "ok": False, "error": str(e)[:80]})
+        r = collect_jiemian(date=date_param, end_date=end_param, resolve_links=resolve_links)
+        if r.get("items"):
+            all_items.extend(r["items"])
+        source_results.append(r)
 
-    # [4] 新浪汽车7x24快讯 — 专用采集
+    # [4] 新浪汽车
     if include_sina:
-        try:
-            r = collect_sina_auto_7x24(date, end, pages=12, limit=20, timeout=20)
-            if r.get("items"):
-                items.extend(r["items"])
-            sources.append({
-                "name": "新浪汽车7x24快讯",
-                "ok": r.get("ok", False),
-                "count": len(r.get("items", [])),
-                "url": "https://auto.sina.com.cn/7x24/",
-            })
-        except Exception as e:
-            sources.append({"name": "新浪汽车7x24快讯", "ok": False, "error": str(e)[:80]})
+        r = collect_sina(date=date_param, end_date=end_param, resolve_links=resolve_links)
+        if r.get("items"):
+            all_items.extend(r["items"])
+        source_results.append(r)
 
-    # [5] 汽车之家上市新车 — 专用采集
+    # [5] 汽车之家
     if include_autohome:
-        try:
-            r = collect_autohome_newbrand(date, end, timeout=20, link_limit=80, fetch_details=True)
-            if r.get("items"):
-                items.extend(r["items"])
-            sources.append({
-                "name": "汽车之家上市新车",
-                "ok": r.get("ok", False),
-                "count": len(r.get("items", [])),
-                "url": "https://www.autohome.com.cn/newbrand/",
-            })
-        except Exception as e:
-            sources.append({"name": "汽车之家上市新车", "ok": False, "error": str(e)[:80]})
+        r = collect_autohome(date=date_param, end_date=end_param, resolve_links=resolve_links)
+        if r.get("items"):
+            all_items.extend(r["items"])
+        source_results.append(r)
 
-    # [6] 易车新车消息 — 优先用 xinchexiaoxi（无验证码），失败再用 Playwright
+    # [6] 易车
     if include_yiche:
-        yiche_items = []
-        # 先尝试 xinchexiaoxi（纯requests，无验证码）
-        try:
-            yiche_items = _collect_yiche_xinchexiaoxi(date, end)
-        except Exception:
-            pass
-
-        if yiche_items:
-            items.extend(yiche_items)
-            sources.append({
-                "name": "易车新车消息",
-                "ok": True,
-                "count": len(yiche_items),
-                "url": "https://news.yiche.com/xinchexiaoxi/",
-            })
-        else:
-            # 降级到 Playwright（需处理验证码）
-            try:
-                sd = datetime.date.fromisoformat(date)
-                ed = datetime.date.fromisoformat(end)
-                for attempt in range(2):
-                    try:
-                        pw_items = run_coro_sync(_yiche_pw(sd, ed, cookies=yiche_cookie))
-                        if pw_items:
-                            items.extend(pw_items)
-                            sources.append({
-                                "name": "易车新车新闻(Playwright)",
-                                "ok": True,
-                                "count": len(pw_items),
-                                "url": "https://news.yiche.com/xinche/",
-                            })
-                            break
-                    except Exception:
-                        if attempt < 1:
-                            time.sleep(1.5)
-                        else:
-                            raise
-                else:
-                    sources.append({
-                        "name": "易车新车新闻", "ok": False,
-                        "error": "xinchexiaoxi无数据且Playwright不可用",
-                    })
-            except Exception as e:
-                sources.append({"name": "易车新车新闻", "ok": False, "error": str(e)[:80]})
+        r = collect_yiche(date=date_param, end_date=end_param, cookie=yiche_cookie)
+        if r.get("items"):
+            all_items.extend(r["items"])
+        source_results.append(r)
 
     # ---- 去重 + 日期过滤 ----
-    # 注意：CLS/界面子条目共享同一URL，不能按URL去重，改用(title+source_type)去重
     try:
         deduped = []
         seen_keys = set()
-        for item in items:
+        for item in all_items:
             st = item.get("source_type", "")
             if st in ("cls_auto_morning", "jiemian_auto_morning", "autoinfo"):
                 key = item.get("title", "") + "|" + st
@@ -557,57 +447,22 @@ def collect_all_sources(
                 continue
             seen_keys.add(key)
             deduped.append(item)
-        items = deduped
-        items = filter_items_by_date(items, date, end, strict=True)
+        all_items = deduped
+        all_items = filter_items_by_date(all_items, date_param, end_param, strict=True)
     except Exception:
         pass
 
-    # ---- 链接补充 ----
-    # 1) 早报/政策子条目搜索独立链接
-    # 2) 政府类补官网域名（兜底）
-    if resolve_links and items:
-        # 先做搜索（对cls/jiemian/autoinfo等没有独立链接的信源）
-        try:
-            for item in items:
-                st = item.get("source_type", "")
-                if st in ("cls_auto_morning", "jiemian_auto_morning", "autoinfo"):
-                    # 清除首页域名，让 resolve_original_link 触发搜索
-                    old_url = item.get("url", "")
-                    if old_url and ".gov.cn" in old_url:
-                        item["url"] = ""
-                    info = resolve_original_link(item, search_if_needed=True)
-                    if info.get("is_original_link") and info.get("url"):
-                        item["url"] = info["url"]
-                        item["link_source"] = info.get("link_type", "搜索→原文")
-                    elif old_url:
-                        item["url"] = old_url  # 搜索失败则恢复首页兜底
-        except Exception:
-            pass
-
-        # 再补官网域名（仅对仍然无链接的条目）
-        for item in items:
-            if not item.get("url"):
-                src = item.get("source", "") or item.get("type", "") or ""
-                url, link_src = _gov_link(src)
-                if url:
-                    item["url"] = url
-                    item["link_source"] = link_src
-
-    # ---- 历史去重：过滤已采集过的URL ----
-    dedup_count = 0
+    # ---- 历史去重过滤 ----
     if mode == "auto" and seen_urls:
-        before = len(items)
-        items = [i for i in items if i.get("url") and i["url"] not in seen_urls]
-        dedup_count = before - len(items)
+        before = len(all_items)
+        all_items = [i for i in all_items if i.get("url") and i["url"] not in seen_urls]
+        dedup_count = before - len(all_items)
         if dedup_count:
-            sources.append({
-                "name": "去重过滤", "ok": True,
-                "count": dedup_count, "detail": "已采集过，跳过",
-            })
+            source_results.append({"name": "去重过滤", "ok": True, "count": dedup_count, "detail": "已采集过，跳过"})
 
-    # ---- 保存新采集的URL到历史文件 ----
+    # ---- 保存历史URL ----
     if mode == "auto":
-        new_urls = [i["url"] for i in items if i.get("url")]
+        new_urls = [i["url"] for i in all_items if i.get("url")]
         seen_urls.update(new_urls)
         try:
             with open(dedup_file, "w", encoding="utf-8") as f:
@@ -615,15 +470,131 @@ def collect_all_sources(
         except Exception:
             pass
 
-    table_rows = items_to_table_rows(items, default_date=date, resolve_links=False)
+    table_rows = items_to_table_rows(all_items, default_date=date_param, resolve_links=False)
 
     return {
         "ok": True,
-        "date": date,
-        "end_date": end,
-        "count": len(items),
-        "items": items,
-        "sources": sources,
+        "date": date_param,
+        "end_date": end_param,
+        "count": len(all_items),
+        "items": all_items,
+        "sources": source_results,
         "table_columns": TABLE_COLUMNS,
         "table_rows": table_rows,
     }
+
+
+# ============================================================
+# 各信源独立工具（可单独在EAI中调用）
+# ============================================================
+
+@mcp.tool()
+def collect_autoinfo(
+    date: str, end_date: str = None, resolve_links: bool = True
+) -> dict:
+    """采集中国汽车工业信息网政策新闻"""
+    end = end_date or date
+    try:
+        auto_items = _collect_autoinfo_api(date, end)
+        if resolve_links and auto_items:
+            for item in auto_items:
+                old_url = item.get("url", "")
+                if old_url and ".gov.cn" in old_url:
+                    item["url"] = ""
+                info = resolve_original_link(item, search_if_needed=True)
+                if info.get("is_original_link") and info.get("url"):
+                    item["url"] = info["url"]
+                    item["link_source"] = info.get("link_type", "搜索→原文")
+                elif old_url:
+                    item["url"] = old_url
+        return {"ok": True, "source": "中国汽车工业信息网", "count": len(auto_items), "items": auto_items}
+    except Exception as e:
+        return {"ok": False, "source": "中国汽车工业信息网", "error": str(e)[:200]}
+
+
+@mcp.tool()
+def collect_cls(
+    date: str, end_date: str = None, resolve_links: bool = True
+) -> dict:
+    """采集财联社汽车早报"""
+    end = end_date or date
+    try:
+        r = collect_cls_auto_morning(date, end, timeout=20)
+        items = r.get("items", [])
+        if resolve_links and items:
+            for item in items:
+                old_url = item.get("url", "")
+                info = resolve_original_link(item, search_if_needed=True)
+                if info.get("is_original_link") and info.get("url"):
+                    item["url"] = info["url"]
+                    item["link_source"] = info.get("link_type", "搜索→原文")
+        return {"ok": True, "source": "财联社汽车早报", "count": len(items), "items": items}
+    except Exception as e:
+        return {"ok": False, "source": "财联社汽车早报", "error": str(e)[:200]}
+
+
+@mcp.tool()
+def collect_jiemian(
+    date: str, end_date: str = None, resolve_links: bool = True
+) -> dict:
+    """采集界面新闻汽车早报"""
+    end = end_date or date
+    try:
+        items = _collect_jiemian_inline(date, end)
+        if resolve_links and items:
+            for item in items:
+                info = resolve_original_link(item, search_if_needed=True)
+                if info.get("is_original_link") and info.get("url"):
+                    item["url"] = info["url"]
+                    item["link_source"] = info.get("link_type", "搜索→原文")
+        return {"ok": True, "source": "界面新闻汽车早报", "count": len(items), "items": items}
+    except Exception as e:
+        return {"ok": False, "source": "界面新闻汽车早报", "error": str(e)[:200]}
+
+
+@mcp.tool()
+def collect_sina(
+    date: str, end_date: str = None, resolve_links: bool = True
+) -> dict:
+    """采集新浪汽车7x24快讯"""
+    end = end_date or date
+    try:
+        r = collect_sina_auto_7x24(date, end, pages=12, limit=20, timeout=20)
+        return {"ok": r.get("ok", False), "source": "新浪汽车7x24快讯", "count": len(r.get("items", [])), "items": r.get("items", [])}
+    except Exception as e:
+        return {"ok": False, "source": "新浪汽车7x24快讯", "error": str(e)[:200]}
+
+
+@mcp.tool()
+def collect_autohome(
+    date: str, end_date: str = None, resolve_links: bool = True
+) -> dict:
+    """采集汽车之家上市新车"""
+    end = end_date or date
+    try:
+        r = collect_autohome_newbrand(date, end, timeout=20, link_limit=80, fetch_details=True)
+        return {"ok": r.get("ok", False), "source": "汽车之家上市新车", "count": len(r.get("items", [])), "items": r.get("items", [])}
+    except Exception as e:
+        return {"ok": False, "source": "汽车之家上市新车", "error": str(e)[:200]}
+
+
+@mcp.tool()
+def collect_yiche(
+    date: str, end_date: str = None, cookie: str = None
+) -> dict:
+    """采集易车新车消息（优先用xinchexiaoxi，失败降级Playwright）"""
+    end = end_date or date
+    try:
+        items = _collect_yiche_xinchexiaoxi(date, end)
+        if items:
+            return {"ok": True, "source": "易车新车消息", "method": "xinchexiaoxi", "count": len(items), "items": items}
+        sd = datetime.date.fromisoformat(date)
+        ed = datetime.date.fromisoformat(end)
+        pw_items = run_coro_sync(_yiche_pw(sd, ed, cookies=cookie))
+        if pw_items:
+            return {"ok": True, "source": "易车新车新闻", "method": "playwright", "count": len(pw_items), "items": pw_items}
+        return {"ok": False, "source": "易车新车新闻", "error": "xinchexiaoxi无数据且Playwright不可用"}
+    except Exception as e:
+        return {"ok": False, "source": "易车新车新闻", "error": str(e)[:200]}
+
+
