@@ -353,7 +353,6 @@ def collect_all_sources(
     date: str = None,
     end_date: str = None,
     mode: str = "auto",
-    resolve_links: bool = True,
     include_yiche: bool = True,
     yiche_cookie: str = None,
     include_autoinfo: bool = True,
@@ -406,7 +405,7 @@ def collect_all_sources(
 
     # [1] 中国汽车工业信息网
     if include_autoinfo:
-        r = collect_autoinfo(date=date_param, end_date=end_param, resolve_links=resolve_links)
+        r = collect_autoinfo(date=date_param, end_date=end_param)
         if r.get("items"):
             all_items.extend(r["items"])
         source_results.append(r)
@@ -420,21 +419,21 @@ def collect_all_sources(
 
     # [3] 界面新闻
     if include_jiemian:
-        r = collect_jiemian(date=date_param, end_date=end_param, resolve_links=resolve_links)
+        r = collect_jiemian(date=date_param, end_date=end_param)
         if r.get("items"):
             all_items.extend(r["items"])
         source_results.append(r)
 
     # [4] 新浪汽车
     if include_sina:
-        r = collect_sina(date=date_param, end_date=end_param, resolve_links=resolve_links)
+        r = collect_sina(date=date_param, end_date=end_param)
         if r.get("items"):
             all_items.extend(r["items"])
         source_results.append(r)
 
     # [5] 汽车之家
     if include_autohome:
-        r = collect_autohome(date=date_param, end_date=end_param, resolve_links=resolve_links)
+        r = collect_autohome(date=date_param, end_date=end_param)
         if r.get("items"):
             all_items.extend(r["items"])
         source_results.append(r)
@@ -503,23 +502,41 @@ def collect_all_sources(
 
 @mcp.tool()
 def collect_autoinfo(
-    date: str, end_date: str = None, resolve_links: bool = True
+    date: str, end_date: str = None
 ) -> dict:
-    """采集中国汽车工业信息网政策新闻"""
+    """采集中国汽车工业信息网政策新闻，自动搜索对应新闻页链接"""
     end = end_date or date
     try:
         auto_items = _collect_autoinfo_api(date, end)
-        if resolve_links and auto_items:
+        if auto_items:
             for item in auto_items:
                 old_url = item.get("url", "")
                 if old_url and ".gov.cn" in old_url:
                     item["url"] = ""
+                # 1) 通用搜索
                 info = resolve_original_link(item, search_if_needed=True)
                 if info.get("is_original_link") and info.get("url"):
                     item["url"] = info["url"]
                     item["link_source"] = info.get("link_type", "搜索→原文")
                 elif old_url:
-                    item["url"] = old_url
+                    # 2) 通用搜索失败，用百度搜索 site:{domain} {title}
+                    try:
+                        src = item.get("source", "")
+                        for name, domain in GOV_DOMAINS.items():
+                            if name in src:
+                                q = f"site:{domain} {item['title'][:40]}"
+                                sr = web_search(q, limit=8)
+                                for r in sr.get("results", []):
+                                    u = r.get("url", "")
+                                    if domain in u and len(u) > 30 and "baidu.com/link" in u:
+                                        item["url"] = u
+                                        item["link_source"] = f"百度({domain})"
+                                        break
+                                break
+                    except Exception:
+                        pass
+                    if not item.get("url"):
+                        item["url"] = old_url  # 兜底：官网首页
         return {"ok": True, "source": "中国汽车工业信息网", "count": len(auto_items), "items": auto_items}
     except Exception as e:
         return {"ok": False, "source": "中国汽车工业信息网", "error": str(e)[:200]}
@@ -548,13 +565,13 @@ def collect_cls(
 
 @mcp.tool()
 def collect_jiemian(
-    date: str, end_date: str = None, resolve_links: bool = True
+    date: str, end_date: str = None
 ) -> dict:
-    """采集界面新闻汽车早报"""
+    """采集界面新闻汽车早报，自动搜索独立链接"""
     end = end_date or date
     try:
         items = _collect_jiemian_inline(date, end)
-        if resolve_links and items:
+        if items:
             for item in items:
                 info = resolve_original_link(item, search_if_needed=True)
                 if info.get("is_original_link") and info.get("url"):
@@ -564,10 +581,9 @@ def collect_jiemian(
     except Exception as e:
         return {"ok": False, "source": "界面新闻汽车早报", "error": str(e)[:200]}
 
-
 @mcp.tool()
 def collect_sina(
-    date: str, end_date: str = None, resolve_links: bool = True
+    date: str, end_date: str = None
 ) -> dict:
     """采集新浪汽车7x24快讯"""
     end = end_date or date
@@ -580,7 +596,7 @@ def collect_sina(
 
 @mcp.tool()
 def collect_autohome(
-    date: str, end_date: str = None, resolve_links: bool = True
+    date: str, end_date: str = None
 ) -> dict:
     """采集汽车之家上市新车"""
     end = end_date or date
