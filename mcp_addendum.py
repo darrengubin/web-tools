@@ -224,14 +224,24 @@ def _split_jiemian_detail(text: str, main_title: str, url: str, pub_date: str) -
 # ============================================================
 # 易车 xinchexiaoxi 内联采集器（无验证码！）
 # ============================================================
-def _collect_yiche_xinchexiaoxi(date: str, end: str) -> list:
-    """采集 news.yiche.com/xinchexiaoxi/（无腾讯验证码）"""
+def _collect_yiche_xinchexiaoxi(date: str, end: str, cookies: str = None) -> list:
+    """采集 news.yiche.com/xinchexiaoxi/（支持Cookie绕过验证码）"""
     try:
         import requests as req
         from bs4 import BeautifulSoup
         import re, datetime
 
         hdrs = {"User-Agent": "Mozilla/5.0 Chrome/126.0.0.0"}
+        if cookies:
+            # 将JSON cookie转为cookie dict
+            try:
+                import json as j
+                c_list = j.loads(cookies)
+                hdrs["Cookie"] = "; ".join(f"{c['name']}={c['value']}" for c in c_list if isinstance(c, dict) and 'name' in c and 'value' in c)
+            except Exception:
+                # 也支持直接cookie字符串
+                if '=' in cookies:
+                    hdrs["Cookie"] = cookies
         today = datetime.date.today()
         items = []
         seen = set()
@@ -403,7 +413,7 @@ def collect_all_sources(
 
     # [2] 财联社
     if include_cls:
-        r = collect_cls(date=date_param, end_date=end_param, resolve_links=resolve_links)
+        r = collect_cls(date=date_param, end_date=end_param)
         if r.get("items"):
             all_items.extend(r["items"])
         source_results.append(r)
@@ -517,14 +527,14 @@ def collect_autoinfo(
 
 @mcp.tool()
 def collect_cls(
-    date: str, end_date: str = None, resolve_links: bool = True
+    date: str, end_date: str = None
 ) -> dict:
-    """采集财联社汽车早报"""
+    """采集财联社汽车早报，自动为每条新闻搜索独立链接"""
     end = end_date or date
     try:
         r = collect_cls_auto_morning(date, end, timeout=20)
         items = r.get("items", [])
-        if resolve_links and items:
+        if items:
             for item in items:
                 old_url = item.get("url", "")
                 info = resolve_original_link(item, search_if_needed=True)
@@ -588,7 +598,7 @@ def collect_yiche(
     """采集易车新车消息（优先用xinchexiaoxi，失败降级Playwright）"""
     end = end_date or date
     try:
-        items = _collect_yiche_xinchexiaoxi(date, end)
+        items = _collect_yiche_xinchexiaoxi(date, end, cookies=cookie)
         if items:
             return {"ok": True, "source": "易车新车消息", "method": "xinchexiaoxi", "count": len(items), "items": items}
         sd = datetime.date.fromisoformat(date)
