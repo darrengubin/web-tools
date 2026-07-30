@@ -104,34 +104,49 @@ def _collect_jiemian_inline(date: str, end: str) -> list:
         hdrs = {"User-Agent": "Mozilla/5.0 Chrome/126.0.0.0"}
         today = datetime.date.today()
         items = []
-        seen_urls = set()
+        seen_urls = {}
 
         for page in range(1, 4):
             resp = req.get(f"https://m.jiemian.com/lists/51_{page}.html", headers=hdrs, timeout=15)
             soup = BeautifulSoup(resp.text, "lxml")
 
-            # 找到所有新闻条目容器——每个 div.news-view 包含链接和时间
-            for news_div in soup.find_all("div", class_=re.compile(r"news-view|news-left")):
-                link = news_div.find("a")
-                time_span = news_div.find("span")
-                if not link or not time_span:
-                    continue
-                href = link.get("href", "")
-                title = link.get_text(strip=True)
-                time_text = time_span.get_text(strip=True)
-
-                if "汽车早报" not in title:
-                    continue
+            # 第一遍：收集所有汽车早报的URL和标题
+            articles = {}
+            for a in soup.find_all("a", href=True):
+                href = a["href"]
                 if not re.search(r"jiemian\.com/article/\d+\.html", href):
                     continue
-
+                title = a.get_text(strip=True)
+                if "汽车早报" not in title:
+                    continue
                 url = "https:" + href if href.startswith("//") else \
                       "https://m.jiemian.com" + href if href.startswith("/") else href
-                if url in seen_urls:
-                    continue
-                seen_urls.add(url)
+                if url not in articles:
+                    articles[url] = title
 
-                # 解析时间文本 → 日期
+            # 第二遍：从span中找时间文本
+            # 界面列表结构：<div class="news-footer"><span>昨天08:33</span></div>
+            time_map = {}
+            for span in soup.find_all("span"):
+                text = span.get_text(strip=True)
+                if not ("今天" in text or "昨天" in text or "前天" in text or re.match(r"\d{4}[-/]\d", text)):
+                    continue
+                parent = span.find_parent(["div", "p"])
+                if not parent:
+                    continue
+                prev_a = parent.find_previous("a", href=True)
+                if not prev_a:
+                    continue
+                href = prev_a["href"]
+                if not re.search(r"jiemian\.com/article/\d+\.html", href):
+                    continue
+                url = "https:" + href if href.startswith("//") else \
+                      "https://m.jiemian.com" + href if href.startswith("/") else href
+                if url in articles and url not in time_map:
+                    time_map[url] = text
+
+            for url, title in articles.items():
+                time_text = time_map.get(url, "")
                 pub_date = None
                 m = re.match(r"(\d{4})-(\d{1,2})-(\d{1,2})", time_text)
                 if m:
@@ -143,30 +158,18 @@ def _collect_jiemian_inline(date: str, end: str) -> list:
                 elif "前天" in time_text:
                     pub_date = (today - datetime.timedelta(days=2)).isoformat()
 
-                if pub_date and date <= pub_date <= end:
-                    # 获取详情页内容
+                if pub_date and date <= pub_date <= end and url not in seen_urls:
+                    seen_urls[url] = pub_date
                     try:
                         detail = req.get(url, headers=hdrs, timeout=10)
-                        detail_soup = BeautifulSoup(detail.text, "lxml")
-                        detail_text = detail_soup.get_text()
-                        # 尝试从详情页提取更精确的发布时间
-                        for meta in detail_soup.find_all("meta"):
-                            prop = meta.get("property", "") or meta.get("name", "") or ""
-                            if "published_time" in prop or "pubdate" in prop.lower():
-                                dt = (meta.get("content", "") or "")[:10]
-                                if dt: pub_date = dt; break
+                        detail_text = BeautifulSoup(detail.text, "lxml").get_text()
                     except Exception:
                         detail_text = ""
-
-                    # 拆分早报 → 子条目（复用现有逻辑）
                     sub_items = _split_jiemian_detail(detail_text, title, url, pub_date)
                     if not sub_items:
-                        # 至少返回标题本身
-                        sub_items.append({
-                            "title": title, "summary": title, "url": url,
+                        sub_items.append({"title": title, "summary": title, "url": url,
                             "source": "界面新闻汽车早报", "source_type": "jiemian_auto_morning",
-                            "publish_date": pub_date, "type": "行业新闻",
-                        })
+                            "publish_date": pub_date, "type": "行业新闻"})
                     items.extend(sub_items)
         return items
     except Exception:
