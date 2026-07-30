@@ -408,7 +408,7 @@ def collect_all_sources(
     end = end_str
 
     # ---- 读取历史去重 ----
-    dedup_file = os.path.join(here, ".collected_urls.json")
+    dedup_file = "/tmp/.collected_urls.json"
     seen_urls = set()
     if os.path.exists(dedup_file):
         try:
