@@ -6,6 +6,9 @@ MCP 增强模块 — 6大信源专用采集器
 import datetime, time
 from typing import Optional
 
+# ---- 易车 Cookie 存储（通过 set_yiche_cookie 设置） ----
+_yiche_cookie_global = None
+
 # ============================================================
 # 政府机构 → 官网域名映射（autoinfo 链接补充用）
 # ============================================================
@@ -608,18 +611,28 @@ def collect_autohome(
 
 
 @mcp.tool()
+def set_yiche_cookie(cookie: str) -> str:
+    """设置易车Cookie（全局生效，后续collect_yiche自动使用）。在EAI调一次即可。"""
+    global _yiche_cookie_global
+    _yiche_cookie_global = cookie
+    return f"✅ 易车Cookie已设置（{len(cookie)} bytes）"
+
+
+@mcp.tool()
 def collect_yiche(
     date: str, end_date: str = None, cookie: str = None
 ) -> dict:
-    """采集易车新车消息（优先用xinchexiaoxi，失败降级Playwright）"""
+    """采集易车新车消息。cookie可选，不传则使用set_yiche_cookie设置的全局Cookie。"""
     end = end_date or date
+    # 优先用参数cookie，其次用全局cookie
+    used_cookie = cookie or _yiche_cookie_global
     try:
-        items = _collect_yiche_xinchexiaoxi(date, end, cookies=cookie)
+        items = _collect_yiche_xinchexiaoxi(date, end, cookies=used_cookie)
         if items:
             return {"ok": True, "source": "易车新车消息", "method": "xinchexiaoxi", "count": len(items), "items": items}
         sd = datetime.date.fromisoformat(date)
         ed = datetime.date.fromisoformat(end)
-        pw_items = run_coro_sync(_yiche_pw(sd, ed, cookies=cookie))
+        pw_items = run_coro_sync(_yiche_pw(sd, ed, cookies=used_cookie))
         if pw_items:
             return {"ok": True, "source": "易车新车新闻", "method": "playwright", "count": len(pw_items), "items": pw_items}
         return {"ok": False, "source": "易车新车新闻", "error": "xinchexiaoxi无数据且Playwright不可用"}
